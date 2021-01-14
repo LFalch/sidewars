@@ -109,12 +109,14 @@ fn spawn_fighter(cmds: &mut Commands, x: f32, y: f32, flipped: bool, materials: 
 
 fn fighter_health_bar_system(
     query: Query<(&Fighter, &Children)>,
-    mut health_query: Query<&mut Sprite, With<HealthBar>>,
+    mut health_query: Query<(&mut Transform, &mut Sprite), With<HealthBar>>,
 ) {
     for (fighter, children) in query.iter() {
         for child in &**children {
-            if let Ok(mut spr) = health_query.get_mut(child.clone()) {
-                spr.size.x = 32. * fighter.hp as f32 / fighter.skills.hp as f32;
+            if let Ok((mut trans, mut spr)) = health_query.get_mut(child.clone()) {
+                let x = 32. * fighter.hp as f32 / fighter.skills.hp as f32;
+                spr.size.x = x;
+                trans.translation.x = 0.5 * x - 16.;
             }
         }
     }
@@ -355,12 +357,13 @@ fn soldier_placement_system(
             }
             _ => continue,
         }
+
         spawn_fighter(commands, mouse_loc.0.x, mouse_loc.0.y, flipped, &materials, Skills {
-            attack: 10,
-            defence: 15,
+            attack: 30,
+            defence: 10,
             hp: 20,
-            strength: 10,
-            speed: 15,
+            strength: 5,
+            speed: 5,
         });
     }
 }
