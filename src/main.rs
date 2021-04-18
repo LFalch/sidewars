@@ -30,6 +30,7 @@ fn main() {
         .add_system(fighting_system.system())
         .add_system(mouse_location_system.system())
         .add_system(soldier_placement_system.system())
+        .add_system(timeout_system.system())
         .run();
 }
 
@@ -50,6 +51,7 @@ struct Fighter {
     skills: Skills,
     // MAYBE: gear (that gives bonuses in each)
     hp: u8,
+    protection: u8,
     fighting: Option<Entity>,
     attack_cooldown: f32,
     waiting: bool,
@@ -59,10 +61,17 @@ impl Fighter {
     pub fn new(skills: Skills) -> Self {
         Fighter {
             hp: skills.hp,
+            protection: 0,
             skills,
             fighting: None,
             attack_cooldown: 0.,
             waiting: false,
+        }
+    }
+    pub fn with_protection(skills: Skills, protection: u8) -> Self {
+        Fighter {
+            protection,
+            .. Fighter::new(skills)
         }
     }
     fn moving(&self) -> bool {
@@ -71,6 +80,26 @@ impl Fighter {
 }
 
 struct HealthBar;
+
+struct Timeout {
+    time_left: f32,
+    tied_to: Vec<Entity>,
+}
+
+impl Timeout {
+    const fn new(time_left: f32) -> Self {
+        Timeout {
+            time_left,
+            tied_to: Vec::new(),
+        }
+    }
+    fn tied_to(self, tied_to: Vec<Entity>) -> Self {
+        Timeout {
+            tied_to,
+            .. self
+        }
+    }
+}
 
 fn fighter_sprite_bundle(x: f32, y: f32, flipped: bool, materials: &Materials) -> SpriteBundle {
     let mut transform = Transform::from_translation(Vec3::new(x, y, 0.0));
@@ -301,7 +330,8 @@ fn fighting_system(
     commands: &mut Commands,
     pool: Res<ComputeTaskPool>,
     time: Res<Time>,
-    mut query: Query<(Entity, &mut Fighter)>
+    materials: Res<Materials>,
+    mut query: Query<(Entity, &mut Fighter, &Transform)>
 ) {
     let (tx, rx) = sync_channel(query.iter_mut().len());
 
@@ -309,7 +339,7 @@ fn fighting_system(
 
     query
         .par_iter_mut(32)
-        .for_each(&pool, move |(ent, mut fighter)| {
+        .for_each(&pool, move |(ent, mut fighter, _)| {
             fighter.attack_cooldown -= delta;
             if fighter.attack_cooldown <= 0. {
                 fighter.attack_cooldown = 0.;
@@ -322,20 +352,59 @@ fn fighting_system(
     let mut rng = rand::thread_rng();
 
     for (fighter, fought_ent, skills) in rx.into_iter() {
-        if let Ok((_, mut fought)) = query.get_mut(fought_ent) {
+        if let Ok((_, mut fought, f_trans)) = query.get_mut(fought_ent) {
             if rng.gen_range(0..=skills.attack) > rng.gen_range(0..=fought.skills.defence) {
                 let dmg = rng.gen_range(1..=skills.strength);
-                fought.hp = fought.hp.saturating_sub(dmg);
+
+                let actual_dmg = dmg.saturating_sub(rng.gen_range(0..=fought.protection));
+
+                fought.hp = fought.hp.saturating_sub(actual_dmg);
+
+                let mut transform = Transform::from_translation(f_trans.translation);
+
+                transform.translation.y += 45.;
+
+                commands
+                    .spawn(TextBundle {
+                        text: Text {
+                            font: materials.font.clone(),
+                            value: format!("{}", actual_dmg),
+                            style: TextStyle {
+                                color: Color::rgb(0., 0., 0.),
+                                font_size: 16.,
+                                .. Default::default()
+                            }
+                        },
+                        style: Style {
+                            position_type: PositionType::Absolute,
+                            position: Rect {
+                                left: Val::Px(transform.translation.x),
+                                top: Val::Px(transform.translation.y),
+                                .. Default::default()
+                            },
+                            .. Default::default()
+                        },
+                        .. Default::default()
+                    });
+                let ent = commands.current_entity().unwrap();
+                commands
+                    .spawn(SpriteBundle {
+                        transform,
+                        material: materials.red.clone(),
+                        sprite: Sprite::new(Vec2::new(10., 10.)),
+                        ..Default::default()
+                    })
+                    .with(Timeout::new(1.2).tied_to(vec![ent]));
 
                 if fought.hp <= 0 {
                     commands.despawn_recursive(fought_ent);
                 }
             }
         } else {
-            let (_, mut fighter) = query.get_mut(fighter).unwrap();
+            let (_, mut fighter, _) = query.get_mut(fighter).unwrap();
             fighter.fighting = None;
         }
-        let (_, mut fighter) = query.get_mut(fighter).unwrap();
+        let (_, mut fighter, _) = query.get_mut(fighter).unwrap();
         fighter.attack_cooldown += COOLDOWN;
     }
 }
@@ -360,10 +429,27 @@ fn soldier_placement_system(
 
         spawn_fighter(commands, mouse_loc.0.x, mouse_loc.0.y, flipped, &materials, Skills {
             attack: 30,
-            defence: 10,
+            defence: 1,
             hp: 20,
             strength: 5,
-            speed: 5,
+            speed: 35,
         });
+    }
+}
+
+fn timeout_system(
+    commands: &mut Commands,
+    time: Res<Time>,
+    mut query: Query<(Entity, &mut Timeout)>
+) {
+    for (ent, mut timeout) in query.iter_mut() {
+        let time = time.delta_seconds();
+        timeout.time_left -= time;
+        if timeout.time_left <= 0. {
+            commands.despawn(ent);
+            for &ent in &timeout.tied_to {
+                commands.despawn(ent);
+            }
+        }
     }
 }
