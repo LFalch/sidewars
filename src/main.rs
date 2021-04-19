@@ -5,7 +5,7 @@ use rand::Rng;
 
 use bevy::{
     prelude::*,
-    tasks::{ComputeTaskPool, ParallelIterator},
+    tasks::{ComputeTaskPool},
     input::system::exit_on_esc_system,
     render::pass::ClearColor,
     sprite::collide_aabb::{collide, Collision},
@@ -13,12 +13,12 @@ use bevy::{
 
 fn main() {
     App::build()
-        .add_resource(ClearColor(Color::rgb(0.24, 0.5, 0.01)))
-        .add_resource(WindowDescriptor {
+        .insert_resource(ClearColor(Color::rgb(0.24, 0.5, 0.01)))
+        .insert_resource(WindowDescriptor {
             title: "Sidewars".to_owned(),
             .. Default::default()
         })
-        .add_resource(MouseLoc(Default::default()))
+        .insert_resource(MouseLoc(Default::default()))
         .add_plugins(DefaultPlugins)
         .init_resource::<Materials>()
         .add_startup_system(setup.system())
@@ -115,24 +115,24 @@ fn fighter_sprite_bundle(x: f32, y: f32, flipped: bool, materials: &Materials) -
 }
 
 fn spawn_fighter(cmds: &mut Commands, x: f32, y: f32, flipped: bool, materials: &Materials, skills: Skills) {
-    cmds.spawn(fighter_sprite_bundle(x, y, flipped, materials))
-        .with(Fighter::new(skills))
+    cmds.spawn()
+        .insert_bundle(fighter_sprite_bundle(x, y, flipped, materials))
+        .insert(Fighter::new(skills))
         .with_children(|parent| {
             parent
-                .spawn(SpriteBundle {
+                .spawn_bundle(SpriteBundle {
                     material: materials.black.clone(),
                     transform: Transform::from_translation(Vec3::new(0., 30., 1.)),
                     sprite: Sprite::new(Vec2::new(34.0, 10.0)),
                     ..Default::default()
-                })
-                .spawn(SpriteBundle {
+                });
+            parent.spawn_bundle(SpriteBundle {
                     material: materials.green.clone(),
                     transform: Transform::from_translation(Vec3::new(0., 30., 1.)),
                     sprite: Sprite::new(Vec2::new(32.0, 8.0)),
                     ..Default::default()
                 })
-                .with(HealthBar)
-                ;
+                .insert(HealthBar);
         });
 }
 
@@ -160,13 +160,16 @@ struct Materials {
     red: Handle<ColorMaterial>,
 }
 
-impl FromResources for Materials {
-    fn from_resources(resources: &Resources) -> Self {
-        let asset_server = resources.get::<AssetServer>().unwrap();
-        let mut materials = resources.get_mut::<Assets<ColorMaterial>>().unwrap();
+impl FromWorld for Materials {
+    fn from_world(world: &mut World) -> Self {
+        let asset_server = world.get_resource::<AssetServer>().unwrap();
+        let font = asset_server.load("DroidSansMono.ttf");
+        let fighter_asset = asset_server.load("fighter.png").into();
+
+        let mut materials = world.get_resource_mut::<Assets<ColorMaterial>>().unwrap();
         Self {
-            font: asset_server.load("DroidSansMono.ttf"),
-            fighter: materials.add(asset_server.load("fighter.png").into()),
+            font,
+            fighter: materials.add(fighter_asset),
             black: materials.add(Color::rgba(0., 0., 0., 0.33).into()),
             green: materials.add(Color::rgba(0., 1., 0., 0.33).into()),
             red: materials.add(Color::rgb(1., 0., 0.).into()),
@@ -175,57 +178,59 @@ impl FromResources for Materials {
 }
 
 fn setup(
-    commands: &mut Commands,
+    mut commands: Commands,
     materials: Res<Materials>,
 ) {
-    commands
-        .spawn(Camera2dBundle::default())
-        .spawn(CameraUiBundle::default())
-        // TODO: Make player a triangle instead
-        .spawn(TextBundle {
-            text: Text {
-                font: materials.font.clone(),
-                value: "Score:".to_string(),
-                style: TextStyle {
-                    color: Color::rgb(0.5, 0.5, 1.0),
-                    font_size: 40.0,
-                    ..Default::default()
+    commands.spawn_bundle(OrthographicCameraBundle::new_2d());
+    commands.spawn_bundle(UiCameraBundle::default());
+    commands.spawn_bundle(TextBundle {
+        text: Text {
+            sections: vec![
+                TextSection {
+                    value: "Score: ".to_string(),
+                    style: TextStyle {
+                        font: materials.font.clone(),
+                        color: Color::rgb(0.5, 0.5, 1.0),
+                        font_size: 40.0,
+                    }
                 },
-            },
-            style: Style {
-                position_type: PositionType::Absolute,
-                position: Rect {
-                    top: Val::Px(5.0),
-                    left: Val::Px(5.0),
-                    ..Default::default()
-                },
+                TextSection {
+                    value: "".to_string(),
+                    style: TextStyle {
+                        font: materials.font.clone(),
+                        color: Color::rgb(0.5, 0.5, 1.0),
+                        font_size: 40.0,
+                    }
+                }
+            ],
+            .. Default::default()
+        },
+        style: Style {
+            position_type: PositionType::Absolute,
+            position: Rect {
+                top: Val::Px(5.0),
+                left: Val::Px(5.0),
                 ..Default::default()
             },
             ..Default::default()
-        })
-        .with(Scoreboard { score: 0 })
-        ;
+        },
+        ..Default::default()
+    }).insert(Scoreboard { score: 0 });
 }
 
 #[derive(Debug, Default, Copy, Clone)]
 pub struct MouseLoc(Vec2);
 
-#[derive(Default)]
-pub struct MouseLocationState {
-    mouse_motion_event_reader: EventReader<CursorMoved>,
-}
-
 fn mouse_location_system(
-    mut state: Local<MouseLocationState>,
+    mut ev_cursor: EventReader<CursorMoved>,
     windows: Res<Windows>,
-    mouse_motion_events: Res<Events<CursorMoved>>,
     mut mouse_loc: ResMut<MouseLoc>,
 ) {
     let window = windows.get_primary().unwrap();
     let primary_id = window.id();
     let w = window.width() / 2.;
     let h = window.height() / 2.;
-    for cm in state.mouse_motion_event_reader.iter(&mouse_motion_events).filter(|cm| cm.id == primary_id).last() {
+    for cm in ev_cursor.iter().filter(|cm| cm.id == primary_id).last() {
         mouse_loc.0 = cm.position - Vec2::new(-w, -h);
     }
 }
@@ -243,7 +248,11 @@ fn fighter_movement(
 
     let delta = time.delta_seconds();
 
-    query.par_iter_mut(32).filter(|(_, fighter)| fighter.moving()).for_each(&pool, |(mut transform, fighter)| {
+    query.par_for_each_mut(&pool, 32, |(mut transform, fighter)| {
+        if !fighter.moving() {
+            return
+        }
+
         let scale_x = transform.scale.x;
         let translation = &mut transform.translation;
 
@@ -264,7 +273,7 @@ struct Scoreboard {
 
 fn scoreboard_text_system(mut query: Query<(&mut Text, &Scoreboard)>) {
     for (mut text, scoreboard) in query.iter_mut() {
-        text.value = format!("Score: {}", scoreboard.score);
+        text.sections[1].value = format!("{}", scoreboard.score);
     }
 }
 
@@ -327,7 +336,7 @@ use std::sync::mpsc::sync_channel;
 const COOLDOWN: f32 = 1.;
 
 fn fighting_system(
-    commands: &mut Commands,
+    mut commands: Commands,
     pool: Res<ComputeTaskPool>,
     time: Res<Time>,
     materials: Res<Materials>,
@@ -338,8 +347,7 @@ fn fighting_system(
     let delta = time.delta_seconds();
 
     query
-        .par_iter_mut(32)
-        .for_each(&pool, move |(ent, mut fighter, _)| {
+        .par_for_each_mut(&pool, 32, move |(ent, mut fighter, _)| {
             fighter.attack_cooldown -= delta;
             if fighter.attack_cooldown <= 0. {
                 fighter.attack_cooldown = 0.;
@@ -364,40 +372,41 @@ fn fighting_system(
 
                 transform.translation.y += 45.;
 
-                commands
-                    .spawn(TextBundle {
-                        text: Text {
-                            font: materials.font.clone(),
-                            value: format!("{}", actual_dmg),
-                            style: TextStyle {
-                                color: Color::rgb(0., 0., 0.),
-                                font_size: 16.,
-                                .. Default::default()
+                let ent = commands.spawn_bundle(TextBundle {
+                    text: Text {
+                        sections: vec![
+                            TextSection {
+                                value: format!("{}", actual_dmg),
+                                style: TextStyle {
+                                    font: materials.font.clone(),
+                                    color: Color::rgb(0., 0., 0.),
+                                    font_size: 16.,
+                                    .. Default::default()
+                                }
                             }
-                        },
-                        style: Style {
-                            position_type: PositionType::Absolute,
-                            position: Rect {
-                                left: Val::Px(transform.translation.x),
-                                top: Val::Px(transform.translation.y),
-                                .. Default::default()
-                            },
+                        ],
+                        .. Default::default()
+                    },
+                    style: Style {
+                        position_type: PositionType::Absolute,
+                        position: Rect {
+                            left: Val::Px(transform.translation.x),
+                            top: Val::Px(transform.translation.y),
                             .. Default::default()
                         },
                         .. Default::default()
-                    });
-                let ent = commands.current_entity().unwrap();
-                commands
-                    .spawn(SpriteBundle {
-                        transform,
-                        material: materials.red.clone(),
-                        sprite: Sprite::new(Vec2::new(10., 10.)),
-                        ..Default::default()
-                    })
-                    .with(Timeout::new(1.2).tied_to(vec![ent]));
+                    },
+                    .. Default::default()
+                }).id();
+                commands.spawn_bundle(SpriteBundle {
+                    transform,
+                    material: materials.red.clone(),
+                    sprite: Sprite::new(Vec2::new(10., 10.)),
+                    ..Default::default()
+                }).insert(Timeout::new(1.2).tied_to(vec![ent]));
 
                 if fought.hp <= 0 {
-                    commands.despawn_recursive(fought_ent);
+                    commands.entity(fought_ent).despawn_recursive();
                 }
             }
         } else {
@@ -410,7 +419,7 @@ fn fighting_system(
 }
 
 fn soldier_placement_system(
-    commands: &mut Commands,
+    mut commands: Commands,
     mouse_loc: Res<MouseLoc>,
     materials: Res<Materials>,
     mouse_button: Res<Input<MouseButton>>,
@@ -427,7 +436,7 @@ fn soldier_placement_system(
             _ => continue,
         }
 
-        spawn_fighter(commands, mouse_loc.0.x, mouse_loc.0.y, flipped, &materials, Skills {
+        spawn_fighter(&mut commands, mouse_loc.0.x, mouse_loc.0.y, flipped, &materials, Skills {
             attack: 30,
             defence: 1,
             hp: 20,
@@ -438,7 +447,7 @@ fn soldier_placement_system(
 }
 
 fn timeout_system(
-    commands: &mut Commands,
+    mut commands: Commands,
     time: Res<Time>,
     mut query: Query<(Entity, &mut Timeout)>
 ) {
@@ -446,9 +455,9 @@ fn timeout_system(
         let time = time.delta_seconds();
         timeout.time_left -= time;
         if timeout.time_left <= 0. {
-            commands.despawn(ent);
+            commands.entity(ent).despawn();
             for &ent in &timeout.tied_to {
-                commands.despawn(ent);
+                commands.entity(ent).despawn();
             }
         }
     }
