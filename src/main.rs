@@ -371,8 +371,9 @@ fn fighting_system(
                 let mut transform = Transform::from_translation(f_trans.translation);
 
                 transform.translation.y += 45.;
+                transform.translation.z += 1.;
 
-                let ent = commands.spawn_bundle(TextBundle {
+                let ent = commands.spawn_bundle(Text2dBundle {
                     text: Text {
                         sections: vec![
                             TextSection {
@@ -380,22 +381,14 @@ fn fighting_system(
                                 style: TextStyle {
                                     font: materials.font.clone(),
                                     color: Color::rgb(0., 0., 0.),
-                                    font_size: 16.,
+                                    font_size: 17.,
                                     .. Default::default()
                                 }
                             }
                         ],
                         .. Default::default()
                     },
-                    style: Style {
-                        position_type: PositionType::Absolute,
-                        position: Rect {
-                            left: Val::Px(transform.translation.x),
-                            top: Val::Px(transform.translation.y),
-                            .. Default::default()
-                        },
-                        .. Default::default()
-                    },
+                    transform: transform.clone()*Transform::from_translation(Vec3::new(4., -7., 2.)),
                     .. Default::default()
                 }).id();
                 commands.spawn_bundle(SpriteBundle {
