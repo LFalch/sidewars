@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use self_compare::SliceCompareExt;
 
-use rand::Rng;
+use rand::{seq::SliceRandom, Rng};
 
 use bevy::{
     prelude::*,
@@ -49,6 +49,7 @@ type Level = u8;
 
 #[derive(Debug, Clone, Copy)]
 struct Skills {
+    price: u8,
     attack: Level,
     defence: Level,
     strength: Level,
@@ -57,14 +58,41 @@ struct Skills {
     speed: Level,
     siege: Level,
 }
+impl Skills {
+    const PRIVATE: Self = Self {
+        price: 2,
+        attack: 15,
+        defence: 15,
+        hp: 20,
+        strength: 5,
+        speed: 30,
+        siege: 5,
+    };
+    const FIGHTER: Self = Self {
+        price: 3,
+        attack: 30,
+        defence: 5,
+        hp: 15,
+        strength: 10,
+        speed: 35,
+        siege: 7,
+    };
+    const SHIELDSMAN: Self = Self {
+        price: 3,
+        attack: 5,
+        defence: 30,
+        hp: 30,
+        strength: 5,
+        speed: 20,
+        siege: 1,
+    };
+}
 
 #[derive(Debug, Clone, Copy, Component)]
 struct Fighter {
     skills: Skills,
-    // MAYBE: gear (that gives bonuses in each)
     hp: u8,
-    protection: u8,
-    fighting: Option<Entity>,
+    protection: u8, fighting: Option<Entity>,
     attack_cooldown: f32,
     waiting: bool,
 }
@@ -78,12 +106,6 @@ impl Fighter {
             fighting: None,
             attack_cooldown: 0.,
             waiting: false,
-        }
-    }
-    pub fn with_protection(skills: Skills, protection: u8) -> Self {
-        Fighter {
-            protection,
-            .. Fighter::new(skills)
         }
     }
     fn moving(&self) -> bool {
@@ -171,6 +193,18 @@ fn fighter_health_bar_system(
     }
 }
 
+#[derive(Debug, Clone, Copy, Resource)]
+struct SpawnZone {
+    x: f32,
+    timer: f32,
+    height: f32,
+}
+#[derive(Debug, Clone, Copy, Resource)]
+struct Money {
+    left: i16,
+    right: i16,
+}
+
 #[derive(Debug, Clone)]
 #[derive(Resource)]
 struct Materials {
@@ -178,6 +212,7 @@ struct Materials {
     fighter: Handle<Image>,
     black: Color,
     green: Color,
+    yellow: Color,
     red: Color,
 }
 
@@ -192,6 +227,7 @@ impl FromWorld for Materials {
             fighter: fighter_asset,
             black: Color::rgba(0., 0., 0., 0.33),
             green: Color::rgba(0., 1., 0., 0.33),
+            yellow: Color::rgba(1., 1., 0., 0.33),
             red: Color::rgb(1., 0., 0.),
         }
     }
@@ -201,16 +237,38 @@ impl FromWorld for Materials {
 #[derive(Component)]
 struct MainCamera;
 
+const SPAWN_WIDTH: f32 = 64.;
 fn setup(
     mut commands: Commands,
+    window_query: Query<&Window, With<PrimaryWindow>>,
     materials: Res<Materials>,
 ) {
+    let window = window_query.get_single().expect("No primary window.");
+    let height = window.height();
+    let width = window.width();
+
     commands.spawn(Camera2dBundle::default()).insert(MainCamera);
     commands.spawn(TextBundle {
         text: Text {
             sections: vec![
                 TextSection {
-                    value: "Score: ".to_string(),
+                    value: "Attack: ¤".to_string(),
+                    style: TextStyle {
+                        font: materials.font.clone(),
+                        color: Color::rgb(0.5, 0.5, 1.0),
+                        font_size: 40.0,
+                    }
+                },
+                TextSection {
+                    value: "".to_string(),
+                    style: TextStyle {
+                        font: materials.font.clone(),
+                        color: Color::rgb(0.5, 0.5, 1.0),
+                        font_size: 40.0,
+                    }
+                },
+                TextSection {
+                    value: "\nDefender: ¤".to_string(),
                     style: TextStyle {
                         font: materials.font.clone(),
                         color: Color::rgb(0.5, 0.5, 1.0),
@@ -238,7 +296,28 @@ fn setup(
             ..Default::default()
         },
         ..Default::default()
-    }).insert(Scoreboard { score: 0 });
+    }).insert(Scoreboard);
+    let zone_x = width/2.-SPAWN_WIDTH/2.;
+    commands.spawn(SpriteBundle {
+        transform: Transform::from_xyz(-zone_x, 0., 0.),
+        sprite: Sprite {
+            color: materials.yellow.with_a(1.),
+            custom_size: Some(Vec2::new(SPAWN_WIDTH, height)),
+            .. default()
+        },
+        .. default()
+    });
+    commands.spawn(SpriteBundle {
+        transform: Transform::from_xyz(zone_x, 0., 0.),
+        sprite: Sprite {
+            color: materials.yellow.with_a(1.),
+            custom_size: Some(Vec2::new(SPAWN_WIDTH, height)),
+            .. default()
+        },
+        .. default()
+    });
+    commands.insert_resource(SpawnZone { x: zone_x, timer: 1., height, });
+    commands.insert_resource(Money { left: 30, right: 25, });
 }
 
 #[derive(Debug, Default, Copy, Clone)]
@@ -290,8 +369,8 @@ fn figter_siege(
     window_query: Query<&Window, With<PrimaryWindow>>,
     mut commands: Commands,
     query: Query<(Entity, &Transform, &Fighter)>,
-    mut scoreboard_query: Query<&mut Scoreboard>,
     camera_q: Query<(&Camera, &GlobalTransform), With<MainCamera>>,
+    mut money: ResMut<Money>,
 ) {
     let window = window_query.get_single().expect("No primary window.");
     let width = window.width();
@@ -302,22 +381,21 @@ fn figter_siege(
         let pos = camera.world_to_viewport(global_transform, transform.translation).unwrap();
         if pos.x > width {
             commands.entity(ent).despawn_recursive();
-            scoreboard_query.for_each_mut(|mut s| s.score += fighter.skills.siege as i32);
+            money.left += fighter.skills.siege as i16;
         } else if pos.x < 0. {
             commands.entity(ent).despawn_recursive();
-            scoreboard_query.for_each_mut(|mut s| s.score -= fighter.skills.siege as i32);
+            money.right += fighter.skills.siege as i16;
         }
     }
 }
 
 #[derive(Debug, Component)]
-struct Scoreboard {
-    score: i32,
-}
+struct Scoreboard;
 
-fn scoreboard_text_system(mut query: Query<(&mut Text, &Scoreboard)>) {
-    for (mut text, scoreboard) in query.iter_mut() {
-        text.sections[1].value = format!("{}", scoreboard.score);
+fn scoreboard_text_system(mut query: Query<(&mut Text, &Scoreboard)>, money: Res<Money>) {
+    for (mut text, _) in query.iter_mut() {
+        text.sections[1].value = format!("{}", money.left);
+        text.sections[3].value = format!("{}", money.right);
     }
 }
 
@@ -383,6 +461,7 @@ fn fighting_system(
     mut commands: Commands,
     time: Res<Time>,
     materials: Res<Materials>,
+    mut money: ResMut<Money>,
     mut query: Query<(Entity, &mut Fighter, &Transform)>
 ) {
     let (tx, rx) = sync_channel(query.iter_mut().len());
@@ -444,6 +523,11 @@ fn fighting_system(
                 }).insert(Timeout::new(1.15).tied_to(vec![ent]));
 
                 if fought.hp <= 0 {
+                    if f_trans.scale.x > 0. {
+                        money.left += 1;
+                    } else {
+                        money.right += 1;
+                    }
                     commands.entity(fought_ent).despawn_recursive();
                 }
             }
@@ -460,28 +544,39 @@ fn soldier_placement_system(
     mut commands: Commands,
     mouse_loc: Res<MouseLoc>,
     materials: Res<Materials>,
+    mut spawn_zone: ResMut<SpawnZone>,
+    mut money: ResMut<Money>,
+    time: Res<Time>,
     mouse_button: Res<Input<MouseButton>>,
 ) {
-    for button in mouse_button.get_just_pressed() {
-        let flipped;
-        match button {
-            MouseButton::Right => flipped = false,
-            MouseButton::Left => flipped = true,
-            MouseButton::Middle => {
-                eprintln!("{:?}", mouse_loc.0);
-                continue
-            }
-            _ => continue,
-        }
+    let location = mouse_loc.0;
+    if location.x < -spawn_zone.x + SPAWN_WIDTH / 2. && money.left >= 1 {
+        for button in mouse_button.get_just_pressed() {
+            let skills = match button {
+                MouseButton::Left => Skills::FIGHTER,
+                MouseButton::Middle => Skills::PRIVATE,
+                MouseButton::Right => Skills::SHIELDSMAN,
+                _ => continue,
+            };
 
-        spawn_fighter(&mut commands, mouse_loc.0.x, mouse_loc.0.y, flipped, &materials, Skills {
-            attack: 30,
-            defence: 1,
-            hp: 20,
-            strength: 5,
-            speed: 35,
-            siege: 5,
-        });
+            money.left -= skills.price as i16;
+            spawn_fighter(&mut commands, -spawn_zone.x, location.y, false, &materials, skills);
+        }
+    }
+
+    spawn_zone.timer -= time.delta_seconds();
+
+    while spawn_zone.timer < 0. && money.right >= 1 {
+        let denominator = (money.right / 7).max(1) as f32;
+        spawn_zone.timer += 1. / denominator;
+        let mut rng = rand::thread_rng();
+        let y = rng.gen_range(-spawn_zone.height/2. .. spawn_zone.height/2.);
+        let skills = *[
+            Skills::FIGHTER, Skills::PRIVATE, Skills::SHIELDSMAN,
+        ].choose(&mut rng).unwrap();
+
+        money.right -= skills.price as i16;
+        spawn_fighter(&mut commands, spawn_zone.x, y, true, &materials, skills);
     }
 }
 
