@@ -1,27 +1,24 @@
 use std::collections::HashMap;
 use self_compare::SliceCompareExt;
 
-use rand::{seq::SliceRandom, Rng};
+use rand::prelude::*;
 
 use bevy::{
-    prelude::*,
-    render::camera::Camera,
-    sprite::collide_aabb::{collide, Collision},
-    app::AppExit, window::PrimaryWindow,
+    app::AppExit, math::bounding::{Aabb2d, IntersectsVolume}, prelude::*, render::camera::Camera, sprite::Anchor, window::PrimaryWindow
 };
 
 pub fn exit_on_esc_system(
-    keyboard_input: Res<Input<KeyCode>>,
+    keyboard_input: Res<ButtonInput<KeyCode>>,
     mut exit: EventWriter<AppExit>,
 ) {
-    if keyboard_input.pressed(KeyCode::LShift) && keyboard_input.just_pressed(KeyCode::Escape) {
-        exit.send(AppExit);
+    if keyboard_input.pressed(KeyCode::ShiftLeft) && keyboard_input.just_pressed(KeyCode::Escape) {
+        exit.write(AppExit::Success);
     }
 }
 
 fn main() {
     App::new()
-        .insert_resource(ClearColor(Color::rgb(0.24, 0.5, 0.01)))
+        .insert_resource(ClearColor(Color::srgb(0.24, 0.5, 0.01)))
         .insert_resource(MouseLoc(Default::default()))
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
@@ -31,17 +28,17 @@ fn main() {
             .. default()
         }))
         .init_resource::<Materials>()
-        .add_startup_system(setup)
-        .add_system(collision_system)
-        .add_system(fighter_movement)
-        .add_system(figter_siege)
-        .add_system(fighter_health_bar_system)
-        .add_system(exit_on_esc_system)
-        .add_system(scoreboard_text_system)
-        .add_system(fighting_system)
-        .add_system(mouse_location_system)
-        .add_system(soldier_placement_system)
-        .add_system(timeout_system)
+        .add_systems(Startup,  setup)
+        .add_systems(Update, collision_system)
+        .add_systems(Update, fighter_movement)
+        .add_systems(Update, figter_siege)
+        .add_systems(Update, fighter_health_bar_system)
+        .add_systems(Update, exit_on_esc_system)
+        .add_systems(Update, scoreboard_text_system)
+        .add_systems(Update, fighting_system)
+        .add_systems(Update, mouse_location_system)
+        .add_systems(Update, soldier_placement_system)
+        .add_systems(Update, timeout_system)
         .run();
 }
 
@@ -137,20 +134,14 @@ impl Timeout {
     }
 }
 
-fn fighter_sprite_bundle(x: f32, y: f32, flipped: bool, materials: &Materials) -> SpriteBundle {
-    let mut transform = Transform::from_translation(Vec3::new(x, y, 0.0));
-    if flipped {
-        transform.scale.x = -transform.scale.x;
-    }
-    SpriteBundle {
-        texture: materials.fighter.clone(),
-        transform,
-        sprite: Sprite {
-            custom_size: Some(Vec2::new(32.0, 32.0)),
-            .. default()
-        },
+fn fighter_sprite_bundle(x: f32, y: f32, flipped: bool, materials: &Materials) -> (Transform, Sprite) {
+    (Transform::from_xyz(x, y, 0.), Sprite {
+        image: materials.fighter.clone(),
+        flip_x: flipped,
+        anchor: Anchor::Center,
+        custom_size: Some(Vec2::new(32., 32.)),
         .. Default::default()
-    }
+    })
 }
 
 fn spawn_fighter(cmds: &mut Commands, x: f32, y: f32, flipped: bool, materials: &Materials, skills: Skills) {
@@ -159,21 +150,19 @@ fn spawn_fighter(cmds: &mut Commands, x: f32, y: f32, flipped: bool, materials: 
         .insert(Fighter::new(skills))
         .with_children(|parent| {
             parent
-                .spawn(SpriteBundle {
-                    transform: Transform::from_translation(Vec3::new(0., 30., 1.)),
-                    sprite: Sprite {
+                .spawn((Transform::from_translation(Vec3::new(0., 30., 1.)),
+                    Sprite {
                         color: materials.black,
-                        custom_size: Some(Vec2::new(34.0, 10.0)), .. default()
-                    },
-                    ..Default::default()
-                });
-            parent.spawn(SpriteBundle {
-                    transform: Transform::from_translation(Vec3::new(0., 30., 1.)),
-                    sprite: Sprite {
-                        color: materials.green,
-                        custom_size: Some(Vec2::new(32.0, 8.0)), .. default() },
-                    ..Default::default()
-                })
+                        custom_size: Some(Vec2::new(34.0, 10.0)),
+                        .. default()
+                    }));
+            parent.spawn((Transform::from_translation(Vec3::new(0., 30., 1.)),
+                Sprite {
+                    color: materials.green,
+                    custom_size: Some(Vec2::new(32.0, 8.0)),
+                    .. default()
+                }
+            ))
                 .insert(HealthBar);
         });
 }
@@ -225,10 +214,10 @@ impl FromWorld for Materials {
         Self {
             font,
             fighter: fighter_asset,
-            black: Color::rgba(0., 0., 0., 0.33),
-            green: Color::rgba(0., 1., 0., 0.33),
-            yellow: Color::rgba(1., 1., 0., 0.33),
-            red: Color::rgb(1., 0., 0.),
+            black: Color::srgba(0., 0., 0., 0.33),
+            green: Color::srgba(0., 1., 0., 0.33),
+            yellow: Color::srgba(1., 1., 0., 0.33),
+            red: Color::srgb(1., 0., 0.),
         }
     }
 }
@@ -243,79 +232,58 @@ fn setup(
     window_query: Query<&Window, With<PrimaryWindow>>,
     materials: Res<Materials>,
 ) {
-    let window = window_query.get_single().expect("No primary window.");
+    let window = window_query.single().expect("No primary window.");
     let height = window.height();
     let width = window.width();
 
-    commands.spawn(Camera2dBundle::default()).insert(MainCamera);
-    commands.spawn(TextBundle {
-        text: Text {
-            sections: vec![
-                TextSection {
-                    value: "Attack: ¤".to_string(),
-                    style: TextStyle {
-                        font: materials.font.clone(),
-                        color: Color::rgb(0.5, 0.5, 1.0),
-                        font_size: 40.0,
-                    }
-                },
-                TextSection {
-                    value: "".to_string(),
-                    style: TextStyle {
-                        font: materials.font.clone(),
-                        color: Color::rgb(0.5, 0.5, 1.0),
-                        font_size: 40.0,
-                    }
-                },
-                TextSection {
-                    value: "\nDefender: ¤".to_string(),
-                    style: TextStyle {
-                        font: materials.font.clone(),
-                        color: Color::rgb(0.5, 0.5, 1.0),
-                        font_size: 40.0,
-                    }
-                },
-                TextSection {
-                    value: "".to_string(),
-                    style: TextStyle {
-                        font: materials.font.clone(),
-                        color: Color::rgb(0.5, 0.5, 1.0),
-                        font_size: 40.0,
-                    }
-                }
-            ],
-            .. Default::default()
-        },
-        style: Style {
-            position_type: PositionType::Absolute,
-            position: UiRect {
-                top: Val::Px(5.0),
-                left: Val::Px(5.0),
-                ..Default::default()
-            },
+    commands.spawn(Camera2d::default()).insert(MainCamera);
+    commands.spawn((
+        Transform::from_xyz(-width/2., height/2., 0.),
+        TextFont {
+            font: materials.font.clone(),
+            font_size: 35.,
             ..Default::default()
         },
-        ..Default::default()
-    }).insert(Scoreboard);
+        TextColor(Color::srgb(0.5, 0.5, 1.0)),
+        Text2d::new("Attack: ¤"),
+        Anchor::TopLeft,
+    )).with_children(|p| {
+        p.spawn((AttackMoneyText, TextSpan::new(""), TextFont {
+            font: materials.font.clone(),
+            font_size: 35.,
+            ..Default::default()
+        },
+        TextColor(Color::srgb(0.5, 0.5, 1.0)),));
+        p.spawn((TextSpan::new("\nDefence: ¤"), TextFont {
+            font: materials.font.clone(),
+            font_size: 35.,
+            ..Default::default()
+        },
+        TextColor(Color::srgb(0.5, 0.5, 1.0))));
+        p.spawn((DefenceMoneyText, TextSpan::new(""), TextFont {
+            font: materials.font.clone(),
+            font_size: 35.,
+            ..Default::default()
+        },
+        TextColor(Color::srgb(0.5, 0.5, 1.0)),));
+    });
     let zone_x = width/2.-SPAWN_WIDTH/2.;
-    commands.spawn(SpriteBundle {
-        transform: Transform::from_xyz(-zone_x, 0., 0.),
-        sprite: Sprite {
-            color: materials.yellow.with_a(1.),
+    commands.spawn((
+        Transform::from_xyz(-zone_x, 0., 0.),
+        Sprite {
+            color: materials.yellow.with_alpha(1.),
             custom_size: Some(Vec2::new(SPAWN_WIDTH, height)),
             .. default()
-        },
-        .. default()
-    });
-    commands.spawn(SpriteBundle {
-        transform: Transform::from_xyz(zone_x, 0., 0.),
-        sprite: Sprite {
-            color: materials.yellow.with_a(1.),
+        }
+    ));
+    commands.spawn((
+        Transform::from_xyz(zone_x, 0., 0.),
+        Sprite {
+            color: materials.yellow.with_alpha(1.),
             custom_size: Some(Vec2::new(SPAWN_WIDTH, height)),
             .. default()
-        },
-        .. default()
-    });
+        }
+    ));
     commands.insert_resource(SpawnZone { x: zone_x, timer: 1., height, });
     commands.insert_resource(Money { left: 30, right: 25, });
 }
@@ -329,9 +297,9 @@ fn mouse_location_system(
     mut mouse_loc: ResMut<MouseLoc>,
     camera_q: Query<(&Camera, &GlobalTransform), With<MainCamera>>
 ) {
-    let (camera, camera_transform) = camera_q.single();
+    let (camera, camera_transform) = camera_q.single().unwrap();
 
-    let window = window_query.single();
+    let window = window_query.single().unwrap();
 
     mouse_loc.0 = window.cursor_position().unwrap_or(Vec2::ZERO);
     mouse_loc.0 = camera.viewport_to_world_2d(camera_transform, mouse_loc.0).unwrap();
@@ -341,19 +309,19 @@ fn mouse_location_system(
 fn fighter_movement(
     time: Res<Time>,
     window_query: Query<&Window, With<PrimaryWindow>>,
-    mut query: Query<(&mut Transform, &Fighter)>,
+    mut query: Query<(&mut Transform, &Sprite, &Fighter)>,
 ) {
-    let window = window_query.get_single().expect("No primary window.");
+    let window = window_query.single().expect("No primary window.");
     let height = window.height();
 
-    let delta = time.delta_seconds();
+    let delta = time.delta_secs();
 
-    query.par_iter_mut().for_each_mut(|(mut transform, fighter)| {
+    query.par_iter_mut().for_each(|(mut transform, sprite, fighter)| {
         if !fighter.moving() {
             return
         }
 
-        let scale_x = transform.scale.x;
+        let scale_x = if sprite.flip_x { -1. } else { 1. };
         let translation = &mut transform.translation;
 
         translation.x += 3. * scale_x * fighter.skills.speed as f32 * delta;
@@ -372,30 +340,38 @@ fn figter_siege(
     camera_q: Query<(&Camera, &GlobalTransform), With<MainCamera>>,
     mut money: ResMut<Money>,
 ) {
-    let window = window_query.get_single().expect("No primary window.");
+    let window = window_query.single().expect("No primary window.");
     let width = window.width();
 
-    let (camera, global_transform) = camera_q.single();
+    let (camera, global_transform) = camera_q.single().unwrap();
 
     for (ent, transform, fighter) in query.iter() {
         let pos = camera.world_to_viewport(global_transform, transform.translation).unwrap();
         if pos.x > width {
-            commands.entity(ent).despawn_recursive();
+            commands.entity(ent).despawn();
             money.left += fighter.skills.siege as i16;
         } else if pos.x < 0. {
-            commands.entity(ent).despawn_recursive();
+            commands.entity(ent).despawn();
             money.right += fighter.skills.siege as i16;
         }
     }
 }
 
-#[derive(Debug, Component)]
-struct Scoreboard;
+#[derive(Component)]
+struct AttackMoneyText;
+#[derive(Component)]
+struct DefenceMoneyText;
 
-fn scoreboard_text_system(mut query: Query<(&mut Text, &Scoreboard)>, money: Res<Money>) {
-    for (mut text, _) in query.iter_mut() {
-        text.sections[1].value = format!("{}", money.left);
-        text.sections[3].value = format!("{}", money.right);
+fn scoreboard_text_system(
+    atk: Query<&mut TextSpan, (With<AttackMoneyText>, Without<DefenceMoneyText>)>,
+    def: Query<&mut TextSpan, (With<DefenceMoneyText>, Without<AttackMoneyText>)>,
+    money: Res<Money>
+) {
+    for mut text in atk {
+        text.0 = format!("{}", money.left);
+    }
+    for mut text in def {
+        text.0 = format!("{}", money.right);
     }
 }
 
@@ -410,30 +386,21 @@ fn collision_system(
         (right_entity, right_fighter, right_trans, right_spr)
     | {
         let waiting = &mut waiting;
-        let collision = collide(
-            left_trans.translation,
-            left_spr.custom_size.unwrap(),
-            right_trans.translation,
-            right_spr.custom_size.unwrap(),
+        let collision = Aabb2d::new(
+            left_trans.translation.xy(),
+            left_spr.custom_size.unwrap() / 2.).intersects(&Aabb2d::new(
+            right_trans.translation.xy(),
+            right_spr.custom_size.unwrap() / 2.)
         );
-        if let Some(collision) = collision {
-            if left_trans.scale.x == right_trans.scale.x {
-                let ((left_entity, right_entity), (left_fighter, right_fighter)) = if left_trans.scale.x > 0. {
-                    ((left_entity, right_entity), (left_fighter, right_fighter))
+        if collision {
+            if left_spr.flip_x == right_spr.flip_x {
+                let (wait_fighter, wait_entity) = if left_spr.flip_x ^ (left_trans.translation.x < right_trans.translation.x) {
+                    (left_fighter, left_entity)
                 } else {
-                    ((right_entity, left_entity), (right_fighter, left_fighter))
+                    (right_fighter, right_entity)
                 };
-
-                match collision {
-                    Collision::Left | Collision::Top => {
-                        left_fighter.waiting = true;
-                        waiting.insert(left_entity.clone(), true);
-                    }
-                    Collision::Right | Collision::Bottom | Collision::Inside => {
-                        right_fighter.waiting = true;
-                        waiting.insert(right_entity.clone(), true);
-                    }
-                }
+                wait_fighter.waiting = true;
+                waiting.insert(wait_entity.clone(), true);
             } else {
                 left_fighter.fighting = Some(right_entity.clone());
                 right_fighter.fighting = Some(left_entity.clone());
@@ -466,10 +433,10 @@ fn fighting_system(
 ) {
     let (tx, rx) = sync_channel(query.iter_mut().len());
 
-    let delta = time.delta_seconds();
+    let delta = time.delta_secs();
 
     query
-        .par_iter_mut().for_each_mut(move |(ent, mut fighter, _)| {
+        .par_iter_mut().for_each(move |(ent, mut fighter, _)| {
             fighter.attack_cooldown -= delta;
             if fighter.attack_cooldown <= 0. {
                 fighter.attack_cooldown = 0.;
@@ -479,14 +446,14 @@ fn fighting_system(
             }
         });
 
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
     for (fighter, fought_ent, skills) in rx.into_iter() {
         if let Ok((_, mut fought, f_trans)) = query.get_mut(fought_ent) {
-            if rng.gen_range(0..=skills.attack) > rng.gen_range(0..=fought.skills.defence) {
-                let dmg = rng.gen_range(1..=skills.strength);
+            if rng.random_range(0..=skills.attack) > rng.random_range(0..=fought.skills.defence) {
+                let dmg = rng.random_range(1..=skills.strength);
 
-                let actual_dmg = dmg.saturating_sub(rng.gen_range(0..=fought.protection));
+                let actual_dmg = dmg.saturating_sub(rng.random_range(0..=fought.protection));
 
                 fought.hp = fought.hp.saturating_sub(actual_dmg);
 
@@ -495,32 +462,24 @@ fn fighting_system(
                 transform.translation.y += 45.;
                 transform.translation.z += 1.;
 
-                let ent = commands.spawn(Text2dBundle {
-                    text: Text {
-                        sections: vec![
-                            TextSection {
-                                value: format!("{}", actual_dmg),
-                                style: TextStyle {
-                                    font: materials.font.clone(),
-                                    font_size: 20.,
-                                    color: Color::rgb(0., 0., 0.),
-                                }
-                            }
-                        ],
-                        .. Default::default()
+                let ent = commands.spawn((
+                    Text2d(format!("{}", actual_dmg)),
+                    TextFont {
+                        font: materials.font.clone(),
+                        font_size: 18.,
+                        ..Default::default()
                     },
-                    transform: transform.clone()*Transform::from_translation(Vec3::new(0., 0., 2.)),
-                    .. Default::default()
-                }).id();
-                commands.spawn(SpriteBundle {
+                    TextColor(Color::BLACK),
+                    transform.clone() * Transform::from_translation(Vec3::new(0., 0., 2.)),
+                )).id();
+                commands.spawn((
                     transform,
-                    sprite: Sprite {
+                    Sprite {
                         color: materials.red,
                         custom_size: Some(Vec2::new(15., 15.)),
                         .. default()
                     },
-                    .. default()
-                }).insert(Timeout::new(1.15).tied_to(vec![ent]));
+                )).insert(Timeout::new(1.15).tied_to(vec![ent]));
 
                 if fought.hp <= 0 {
                     if f_trans.scale.x > 0. {
@@ -528,7 +487,7 @@ fn fighting_system(
                     } else {
                         money.right += 1;
                     }
-                    commands.entity(fought_ent).despawn_recursive();
+                    commands.entity(fought_ent).despawn();
                 }
             }
         } else {
@@ -547,7 +506,7 @@ fn soldier_placement_system(
     mut spawn_zone: ResMut<SpawnZone>,
     mut money: ResMut<Money>,
     time: Res<Time>,
-    mouse_button: Res<Input<MouseButton>>,
+    mouse_button: Res<ButtonInput<MouseButton>>,
 ) {
     let location = mouse_loc.0;
     if location.x < -spawn_zone.x + SPAWN_WIDTH / 2. && money.left >= 1 {
@@ -564,13 +523,13 @@ fn soldier_placement_system(
         }
     }
 
-    spawn_zone.timer -= time.delta_seconds();
+    spawn_zone.timer -= time.delta_secs();
 
     while spawn_zone.timer < 0. && money.right >= 1 {
         let denominator = (money.right / 7).max(1) as f32;
         spawn_zone.timer += 1. / denominator;
-        let mut rng = rand::thread_rng();
-        let y = rng.gen_range(-spawn_zone.height/2. .. spawn_zone.height/2.);
+        let mut rng = rand::rng();
+        let y = rng.random_range(-spawn_zone.height/2. .. spawn_zone.height/2.);
         let skills = *[
             Skills::FIGHTER, Skills::PRIVATE, Skills::SHIELDSMAN,
         ].choose(&mut rng).unwrap();
@@ -586,7 +545,7 @@ fn timeout_system(
     mut query: Query<(Entity, &mut Timeout)>
 ) {
     for (ent, mut timeout) in query.iter_mut() {
-        let time = time.delta_seconds();
+        let time = time.delta_secs();
         timeout.time_left -= time;
         if timeout.time_left <= 0. {
             commands.entity(ent).despawn();
